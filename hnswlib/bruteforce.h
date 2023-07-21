@@ -8,12 +8,25 @@ namespace hnswlib {
     template<typename dist_t>
     class BruteforceSearch : public AlgorithmInterface<dist_t> {
     public:
-        BruteforceSearch(SpaceInterface <dist_t> *s) {
+    BruteforceSearch(SpaceInterface <dist_t> *s)
+        : data_(nullptr),
+            maxelements_(0),
+            cur_element_count(0),
+            size_per_element_(0),
+            data_size_(0),
+            dist_func_param_(nullptr) {
+    }
 
-        }
-        BruteforceSearch(SpaceInterface<dist_t> *s, const std::string &location) {
-            loadIndex(location, s);
-        }
+
+    BruteforceSearch(SpaceInterface<dist_t> *s, const std::string &location)
+        : data_(nullptr),
+            maxelements_(0),
+            cur_element_count(0),
+            size_per_element_(0),
+            data_size_(0),
+            dist_func_param_(nullptr) {
+        loadIndex(location, s);
+    }
 
         BruteforceSearch(SpaceInterface <dist_t> *s, size_t maxElements) {
             maxelements_ = maxElements;
@@ -23,7 +36,7 @@ namespace hnswlib {
             size_per_element_ = data_size_ + sizeof(labeltype);
             data_ = (char *) malloc(maxElements * size_per_element_);
             if (data_ == nullptr)
-                std::runtime_error("Not enough memory: BruteforceSearch failed to allocate data");
+                throw std::runtime_error("Not enough memory: BruteforceSearch failed to allocate data");
             cur_element_count = 0;
         }
 
@@ -87,47 +100,36 @@ namespace hnswlib {
         }
 
 
-        std::priority_queue<std::pair<dist_t, labeltype >>
-        searchKnn(const void *query_data, size_t k) const {
-            std::priority_queue<std::pair<dist_t, labeltype >> topResults;
-            if (cur_element_count == 0) return topResults;
-            for (int i = 0; i < k; i++) {
-                dist_t dist = fstdistfunc_(query_data, data_ + size_per_element_ * i, dist_func_param_);
-                topResults.push(std::pair<dist_t, labeltype>(dist, *((labeltype *) (data_ + size_per_element_ * i +
-                                                                                    data_size_))));
-            }
-            dist_t lastdist = topResults.top().first;
-            for (int i = k; i < cur_element_count; i++) {
-                dist_t dist = fstdistfunc_(query_data, data_ + size_per_element_ * i, dist_func_param_);
-                if (dist <= lastdist) {
-                    topResults.push(std::pair<dist_t, labeltype>(dist, *((labeltype *) (data_ + size_per_element_ * i +
-                                                                                        data_size_))));
-                    if (topResults.size() > k)
-                        topResults.pop();
-                    lastdist = topResults.top().first;
-                }
+     std::priority_queue<std::pair<dist_t, labeltype >>
+     searchKnn(const void *query_data, size_t k, BaseFilterFunctor* isIdAllowed = nullptr) const {
+         assert(k <= cur_element_count);
+         std::priority_queue<std::pair<dist_t, labeltype >> topResults;
+         if (cur_element_count == 0) return topResults;
+         for (int i = 0; i < k; i++) {
+             dist_t dist = fstdistfunc_(query_data, data_ + size_per_element_ * i, dist_func_param_);
+             labeltype label = *((labeltype*) (data_ + size_per_element_ * i + data_size_));
+             if ((!isIdAllowed) || (*isIdAllowed)(label)) {
+                 topResults.push(std::pair<dist_t, labeltype>(dist, label));
+             }
+         }
+         dist_t lastdist = topResults.empty() ? std::numeric_limits<dist_t>::max() : topResults.top().first;
+         for (int i = k; i < cur_element_count; i++) {
+             dist_t dist = fstdistfunc_(query_data, data_ + size_per_element_ * i, dist_func_param_);
+             if (dist <= lastdist) {
+                 labeltype label = *((labeltype *) (data_ + size_per_element_ * i + data_size_));
+                 if ((!isIdAllowed) || (*isIdAllowed)(label)) {
+                     topResults.push(std::pair<dist_t, labeltype>(dist, label));
+                 }
+                 if (topResults.size() > k)
+                     topResults.pop();
 
-            }
-            return topResults;
-        };
-
-        template <typename Comp>
-        std::vector<std::pair<dist_t, labeltype>>
-        searchKnn(const void* query_data, size_t k, Comp comp) {
-            std::vector<std::pair<dist_t, labeltype>> result;
-            if (cur_element_count == 0) return result;
-
-            auto ret = searchKnn(query_data, k);
-
-            while (!ret.empty()) {
-                result.push_back(ret.top());
-                ret.pop();
-            }
-            
-            std::sort(result.begin(), result.end(), comp);
-
-            return result;
-        }
+                 if (!topResults.empty()) {
+                     lastdist = topResults.top().first;
+                 }
+             }
+         }
+         return topResults;
+     }
 
         void saveIndex(const std::string &location) {
             std::ofstream output(location, std::ios::binary);
@@ -158,7 +160,7 @@ namespace hnswlib {
             size_per_element_ = data_size_ + sizeof(labeltype);
             data_ = (char *) malloc(maxelements_ * size_per_element_);
             if (data_ == nullptr)
-                std::runtime_error("Not enough memory: loadIndex failed to allocate data");
+                throw std::runtime_error("Not enough memory: loadIndex failed to allocate data");
 
             input.read(data_, maxelements_ * size_per_element_);
 
